@@ -45,7 +45,6 @@ function [pixel_vals, has_imagery] = track_pixels(bin_inds, photon_ids, track_ut
 % Tuesday, January 17, 2023 at 11:42:52 AM
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% BEGIN %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  
-    keyboard
     % we need a pixel size for the neighborhood thing later
     pix_scale = range(grid_x(:))/size(grid_x,2);
     
