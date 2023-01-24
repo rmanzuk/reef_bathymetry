@@ -1,4 +1,4 @@
-function [pixel_vals, has_imagery] = track_pixels(bin_inds, photon_ids, track_utmx, track_utmy, satellite_image, grid_x, grid_y, neighborhood_size)
+function [pixel_vals] = track_pixels(bin_inds, photon_ids, track_utmx, track_utmy, satellite_image, grid_x, grid_y, neighborhood_size)
 % This function applies a takes the locations where water depth has been
 % calculated for an ICESat track and their associated locations and returns
 % the pixel values from the associated satellite image.
@@ -34,12 +34,8 @@ function [pixel_vals, has_imagery] = track_pixels(bin_inds, photon_ids, track_ut
 % pixel_vales: 2d array of the same number of rows as the water depth data
 % for the track with associated pixel values for the neighborhood around
 % each depth meaurement. Each column represents a band from the satellite
-% image.
+% image. some places don't have imagery, so we leave zeros there.
 %
-% has_imagery: logical vector with the same nuber of elements as bins for
-% photons. This vector is true when there are enough pixels within the
-% nighborhood to assess color values. False for locations where
-% neighborhoods are absent or cut off in the image.
 % 
 % Written by R. A. Manzuk
 % Tuesday, January 17, 2023 at 11:42:52 AM
@@ -47,11 +43,17 @@ function [pixel_vals, has_imagery] = track_pixels(bin_inds, photon_ids, track_ut
 %%  
     % we need a pixel size for the neighborhood thing later
     pix_scale = range(grid_x(:))/size(grid_x,2);
-    
+
     % get the mean utmx and utmy position of each bin. we will only use
     % land or surface photon returns be cause bottom photon positions are a
     % little less certain due to refraction. Get rid of noise too.
-    [utmx_means, utmy_means] = splitapply(@loc_mean, track_utmx, track_utmy, photon_ids, bin_inds);
+    % do in for loop for now. Not that slow anyways
+    utmx_means = zeros(max(bin_inds),1);
+    utmy_means = zeros(max(bin_inds),1);
+    for i = 1:numel(utmy_means)
+        these_inds = bin_inds == i;
+        [utmx_means(i), utmy_means(i)] = loc_mean(track_utmx(these_inds), track_utmy(these_inds), photon_ids(these_inds));
+    end
 
     % and find the nearest indices on the utm grid of the satellite image
     pos_utmx_inds = knnsearch(grid_x(1,:)',utmx_means);
@@ -96,8 +98,11 @@ function [pixel_vals, has_imagery] = track_pixels(bin_inds, photon_ids, track_ut
     % index the image at the proper location
     col_pix_vals = col_image(linear_inds,:);
 
+    % zeros array to fill in pixel values where we have imagery
+    pixel_vals = zeros(numel(pos_utmy_inds), size(satellite_image,3));
+   
     % now we have to reshape and take the mean to report. Can do all in one line 
-    pixel_vals = squeeze(mean(reshape(col_pix_vals,sum(has_imagery), size(neighborhood_x_coords,2), size(satellite_image,3)),2));
+    pixel_vals(has_imagery,:) = squeeze(mean(reshape(col_pix_vals,sum(has_imagery), size(neighborhood_x_coords,2), size(satellite_image,3)),2));
 
     % easiest grabbing of neighborhoods and assessing mean pixel vals is a
     % for loop, but that's slow. Comment this out and try something faster
