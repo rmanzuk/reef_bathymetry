@@ -101,18 +101,73 @@ for i = 1:numel(gdats.lon)
     gdats.bin_centers{track_ind} = bin_centers;
 end
 
-%% now that we have water depths for all tracks need to get their assodiated pixel values from the satellite image
-% select a neighboorhood size for pixel averaging
-neighborhood_size = 1;
+%% now that we have water depths for all tracks need to get their associated pixel values from the satellite image
+% select a neighboorhood size for pixel averaging in the image
+neighborhood_size = 3;
 
 % loop through and do this for all tracks
 for i = 1:numel(gdats.lon)
         % i is the track_ind
     track_ind = i;
     % bin that thing
-    bin_edges = [min(gdats.along{track_ind}):bin_size:max(gdats.along{track_ind})];
-    along_bins = discretize(gdats.along{track_ind},bin_edges);
+    bin_edges = [min(gdats.adjusted_along{track_ind}):bin_size:max(gdats.adjusted_along{track_ind})];
+    along_bins = discretize(gdats.adjusted_along{track_ind},bin_edges);
 
     % extract pixel values
-    gdats.pixel_vals{track_ind} = track_pixels(along_bins, gdats.photon_ids{track_ind},  gdats.utmx{track_ind},  gdats.utmy{track_ind}, RE, UTM_x, UTM_y, neighborhood_size);
+    [gdats.pixel_vals{track_ind}] = track_pixels(along_bins, gdats.photon_ids{track_ind},  gdats.utmx{track_ind},  gdats.utmy{track_ind}, RE, UTM_x, UTM_y, neighborhood_size);
 end
+
+% get all tracks in one place for good measure
+all_depths = [gdats.mean_depth{1}; gdats.mean_depth{2}; gdats.mean_depth{3};...
+    gdats.mean_depth{4}; gdats.mean_depth{5}; gdats.mean_depth{6}];
+all_pixels = [gdats.pixel_vals{1}; gdats.pixel_vals{2}; gdats.pixel_vals{3};...
+    gdats.pixel_vals{4}; gdats.pixel_vals{5}; gdats.pixel_vals{6}];
+cleaned_depths = all_depths(all_depths > 0 & all_depths < 10 & all_pixels(:,1) > 0);
+cleaned_pixels = all_pixels(all_depths > 0 & all_depths < 10 & all_pixels(:,1) > 0, :);
+
+%% a nice plot of water depth vs color values
+
+
+figure()
+subplot(1,2,1)
+scatter(cleaned_pixels(:,3), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 3');
+hold on
+scatter(cleaned_pixels(:,4), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 4');
+scatter(cleaned_pixels(:,5), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 5');
+hold off
+xlabel('Pixel value')
+ylabel('Water Depth [m]')
+ylim([0 10])
+legend()
+%  and include the log version
+subplot(1,2,2)
+scatter(log10(cleaned_pixels(:,3)), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 3');
+hold on
+scatter(log10(cleaned_pixels(:,4)), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 4');
+scatter(log10(cleaned_pixels(:,5)), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 5');
+hold off
+xlabel('log(Pixel value)')
+ylabel('Water Depth [m]')
+ylim([0 10])
+
+%% band ratios are better for correcting for bottom types when assessing depth from pixel value
+
+n_channels = size(RE,3);
+
+% we'll take all ratios and perform a sensitivity analysis
+combos = nchoosek(1:n_channels,2);
+permutations = reshape(combos(:,perms(1:2)),[],2);
+
+% note its the log band ratios we take
+band_ratios = log10(cleaned_pixels(:,permutations(:,1)))./log10(cleaned_pixels(:,permutations(:,2)));
+
+[r_squareds, best_ratios] = variance_reduction(band_ratios,cleaned_depths);
+
+% and make a plot that helps us visualize the combination of bands that add
+% the most to the regression
+figure()
+hold on
+scatter(1:size(band_ratios,2),max(r_squareds), 30, 'filled')
+text([1:size(band_ratios,2)] - 0.25, max(r_squareds) + 0.01, [num2str(permutations(best_ratios,1)) repmat('/',size(band_ratios,2),1) num2str(permutations(best_ratios,2))])
+ylabel('R^2')
+
