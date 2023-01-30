@@ -1,4 +1,4 @@
-function [slope,intercept,y_calc,r_squared] = linear_least_squares(x,y)
+function [coefficients,y_calc,r_squared] = linear_least_squares(x,y)
 % Matlab has a lot of regression functions and I don't really like them. So
 % good to have my own simple linear least squares ready to go when needed.
 %
@@ -12,11 +12,9 @@ function [slope,intercept,y_calc,r_squared] = linear_least_squares(x,y)
 %
 % OUTPUT
 %
-% slope: slope of the linear fit between x and y or 'm' constant in the
-% linear equation y = mx + b.
-%
-% intercept: y-intercept of the linear fit between x and y or 'b' constant
-% in the linear equation y = mx + b.
+% coefficients: coeffiecients  of the linear fit between x and y. The first
+% coefficient is the 'intercept' and the following ones correspond to each
+% variable from the input x observations.
 %
 % y_calc: vector with calculated y values using the slope, intercept, and
 % input x vector.
@@ -28,15 +26,14 @@ function [slope,intercept,y_calc,r_squared] = linear_least_squares(x,y)
 % 
 % Written by R.A. Manzuk
 % 11/28/2022
+% Edited: Monday, January 30, 2023 at 4:09:15 PM
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% BEGIN %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % to allow for a possible intercept, we need to add a column of ones to
     % our x vector
     full_x = [ones(length(x),1), x];
     % then calculate
-    b = full_x\y;
-    slope = b(2);
-    intercept = b(1);
+    coefficients = full_x\y;
     % and give r_squared
-    y_calc = full_x*b;
+    y_calc = full_x*coefficients;
     r_squared = 1 - sum((y - y_calc).^2)/sum((y - mean(y)).^2);
 end
