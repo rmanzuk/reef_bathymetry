@@ -3,7 +3,7 @@
 % calibrate Beer's Law.
 %
 % Created 01/17/2023
-% Last edited Tuesday, January 17, 2023 at 11:00:49 AM
+% Last edited Monday, January 30, 2023 at 4:09:03 PM
 % R. A. Manzuk
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% loading of bathymetry data from StartUpScript included in the EmilyDataCube
@@ -100,6 +100,18 @@ for i = 1:numel(gdats.lon)
     gdats.depth_sigma{track_ind} = depth_sigma;
     gdats.bin_centers{track_ind} = bin_centers;
 end
+%% cluster satellite image to help with later cluster based regression
+n_clusters = 5;
+
+% don't want land included in the clustering
+RE_masked = im2double(RE) .* mask;
+
+% run function to get clustering results
+[centroid_dists, class_centroids] = spectral_clustering(RE_masked, n_clusters);
+
+% and the hard cluster assignments are just the indices of the minima of
+% the centroid distances.
+[~, cluster_assignments] = min(centroid_dists,[],3);
 
 %% now that we have water depths for all tracks need to get their associated pixel values from the satellite image
 % select a neighboorhood size for pixel averaging in the image
@@ -115,6 +127,9 @@ for i = 1:numel(gdats.lon)
 
     % extract pixel values
     [gdats.pixel_vals{track_ind}] = track_pixels(along_bins, gdats.photon_ids{track_ind},  gdats.utmx{track_ind},  gdats.utmy{track_ind}, RE, UTM_x, UTM_y, neighborhood_size);
+    
+    % and hard cluster assignments
+    [gdats.centroid_dists{track_ind}] = track_pixels(along_bins, gdats.photon_ids{track_ind},  gdats.utmx{track_ind},  gdats.utmy{track_ind}, cluster_assignments, UTM_x, UTM_y, 0);
 end
 
 % get all tracks in one place for good measure
@@ -122,36 +137,12 @@ all_depths = [gdats.mean_depth{1}; gdats.mean_depth{2}; gdats.mean_depth{3};...
     gdats.mean_depth{4}; gdats.mean_depth{5}; gdats.mean_depth{6}];
 all_pixels = [gdats.pixel_vals{1}; gdats.pixel_vals{2}; gdats.pixel_vals{3};...
     gdats.pixel_vals{4}; gdats.pixel_vals{5}; gdats.pixel_vals{6}];
+all_clusters = [gdats.centroid_dists{1}; gdats.centroid_dists{2}; gdats.centroid_dists{3};...
+    gdats.centroid_dists{4}; gdats.centroid_dists{5}; gdats.centroid_dists{6}];
 cleaned_depths = all_depths(all_depths > 0 & all_depths < 10 & all_pixels(:,1) > 0);
 cleaned_pixels = all_pixels(all_depths > 0 & all_depths < 10 & all_pixels(:,1) > 0, :);
-
-%% a nice plot of water depth vs color values
-
-
-figure()
-subplot(1,2,1)
-scatter(cleaned_pixels(:,3), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 3');
-hold on
-scatter(cleaned_pixels(:,4), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 4');
-scatter(cleaned_pixels(:,5), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 5');
-hold off
-xlabel('Pixel value')
-ylabel('Water Depth [m]')
-ylim([0 10])
-legend()
-%  and include the log version
-subplot(1,2,2)
-scatter(log10(cleaned_pixels(:,3)), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 3');
-hold on
-scatter(log10(cleaned_pixels(:,4)), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 4');
-scatter(log10(cleaned_pixels(:,5)), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 5');
-hold off
-xlabel('log(Pixel value)')
-ylabel('Water Depth [m]')
-ylim([0 10])
-
+cleaned_clusters = all_clusters(all_depths > 0 & all_depths < 10 & all_pixels(:,1) > 0);
 %% band ratios are better for correcting for bottom types when assessing depth from pixel value
-
 n_channels = size(RE,3);
 
 % we'll take all ratios and perform a sensitivity analysis
@@ -165,9 +156,78 @@ band_ratios = log10(cleaned_pixels(:,permutations(:,1)))./log10(cleaned_pixels(:
 
 % and make a plot that helps us visualize the combination of bands that add
 % the most to the regression
+% figure()
+% hold on
+% scatter(1:size(band_ratios,2),max(r_squareds), 30, 'filled')
+% text([1:size(band_ratios,2)] - 0.25, max(r_squareds) + 0.01, [num2str(permutations(best_ratios,1)) repmat('/',size(band_ratios,2),1) num2str(permutations(best_ratios,2))])
+% ylabel('R^2')
+
+%% now we are ready for cluster based regression
+% from sensitivity analysis, looks like the first 5 band ratios are most
+% important for getting a good fit
+n_ratios = 5;
+for_fitting = band_ratios(:,1:n_ratios);
+
+% to apply regressions to satellite image, easiest to make it a column and
+RE_col = reshape(RE_masked, [], size(RE_masked,3));
+
+% then take the band ratios
+RE_ratios = log10(RE_col(:,permutations(:,1)))./log10(RE_col(:,permutations(:,2)));
+
+% and grab the parts we need for our model
+RE_regression = [ones(numel(RE_masked(:,:,1)), 1), RE_ratios(:,1:n_ratios)];
+
+% now we just go through all of the cluster assignments and make a model
+% for each one, and fit the satellite image.
+fit_params = zeros(n_clusters, n_ratios+1);
+model_depths = zeros(size(RE_masked,1), size(RE_masked,2), n_clusters);
+for i = 1:max(cleaned_clusters)
+    fit_params(i,:) = linear_least_squares(for_fitting(cleaned_clusters == i,:), cleaned_depths(cleaned_clusters == i));
+
+    % and use the fit on the whole image, reshape into image
+    model_depths(:,:,i) = reshape(RE_regression*fit_params(i,:)', size(RE_masked,1), size(RE_masked,2));
+end
+
+% make weights based upon distances to centroids
+% first define the power for weighting (usually 2)
+weighting_power = 2;
+distance_weights = centroid_dists .^ weighting_power;
+% and properly apply the weights
+weighted_mean_depths = sum((model_depths.*distance_weights),3)./sum(distance_weights,3);
+
+%% a nice plot of water depth vs color values
+
+
 figure()
+subplot(1,3,1)
+scatter(cleaned_pixels(:,3), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 3');
 hold on
-scatter(1:size(band_ratios,2),max(r_squareds), 30, 'filled')
-text([1:size(band_ratios,2)] - 0.25, max(r_squareds) + 0.01, [num2str(permutations(best_ratios,1)) repmat('/',size(band_ratios,2),1) num2str(permutations(best_ratios,2))])
-ylabel('R^2')
+scatter(cleaned_pixels(:,4), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 4');
+scatter(cleaned_pixels(:,5), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 5');
+hold off
+xlabel('Pixel value')
+ylabel('Water Depth [m]')
+ylim([0 10])
+legend()
+%  and include the log version
+subplot(1,3,2)
+scatter(log10(cleaned_pixels(:,3)), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 3');
+hold on
+scatter(log10(cleaned_pixels(:,4)), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 4');
+scatter(log10(cleaned_pixels(:,5)), cleaned_depths, 10, 'filled', 'DisplayName', 'Band 5');
+hold off
+xlabel('log(Pixel value)')
+ylabel('Water Depth [m]')
+ylim([0 10])
+%  just do band 3 but separated by spectral class
+subplot(1,3,3)
+for i = 1:max(cleaned_clusters)
+    scatter(log10(cleaned_pixels(cleaned_clusters == i,3)), cleaned_depths(cleaned_clusters == i), 10, 'filled', 'DisplayName', ['cluster ' num2str(i)]);
+    hold on
+end
+hold off
+xlabel('log(Pixel value)')
+ylabel('Water Depth [m]')
+ylim([0 10])
+legend()
 
