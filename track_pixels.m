@@ -27,7 +27,9 @@ function [pixel_vals] = track_pixels(bin_inds, photon_ids, track_utmx, track_utm
 % grid_y: 2d mesh grid of utmy coordinates for the satellite_image
 %
 % neighborhood_size: radius of the circular mask used to extract the pixel
-% values from the satellite image at each position (for averaging)
+% values from the satellite image at each position (for averaging). If
+% neighborhood size is zero, the function just gets the single pixel value
+% at the specified location.
 %
 % OUT: 
 %
@@ -59,50 +61,73 @@ function [pixel_vals] = track_pixels(bin_inds, photon_ids, track_utmx, track_utm
     pos_utmx_inds = knnsearch(grid_x(1,:)',utmx_means);
     pos_utmy_inds = knnsearch(grid_y(:,1), utmy_means);
 
-    % to quickly get the pixel values, we'll have to create a set of pixels
-    % in the circle neighborhoods around each pixel. so we'll start by just
-    % making one neighborhood that we'll translate to all the other
-    % locations. 
-    % start with a mask for the first neighborhood
-    mask = (grid_x - grid_x(1,pos_utmx_inds(1))).^2 + (grid_y - grid_y(pos_utmy_inds(1),1)).^2 <= (neighborhood_size*pix_scale).^2;
+    if neighborhood_size == 0
+        % in this case, we just grab the pixels
+        % zeros array to fill in pixel values where we have imagery
+        pixel_vals = zeros(numel(pos_utmy_inds), size(satellite_image,3));
 
-    % get the indices of all pixels within that mask
-    [y_inds_init,x_inds_init] = find(mask == true);
+        % check which neighborhoods are complete in the image
+        valid_x = pos_utmx_inds <= size(grid_x,2) & pos_utmx_inds > 0;
+        valid_y = pos_utmy_inds <= size(grid_x,1) & pos_utmy_inds > 0;
+        has_imagery = all([valid_x,valid_y],2);
+       
+        % just use linear indices for speed and simplicity. As a column vector
+        % for now. We can smartly reshape later
+        linear_inds = sub2ind(size(grid_x), pos_utmy_inds, pos_utmx_inds);
 
-    % define the displacement between all the sampled points and the first
-    % point
-    x_displacements = pos_utmx_inds - pos_utmx_inds(1);
-    y_displacements = pos_utmy_inds - pos_utmy_inds(1);
+        % make the image into a 2d matrix
+        col_image = reshape(satellite_image, [], size(satellite_image,3));
 
-    % and use that displacement to move the neighborhood and get all
-    % indices
-    neighborhood_x_coords = repmat(x_inds_init',numel(x_displacements),1) + x_displacements;
-    neighborhood_y_coords = repmat(y_inds_init',numel(y_displacements),1) + y_displacements;
+        % and just index the proper pixels
+        pixel_vals(has_imagery,:) = col_image(linear_inds(has_imagery), :);
 
-    % check which neighborhoods are complete in the image
-    valid_x = all(neighborhood_x_coords <= size(grid_x,2) & neighborhood_x_coords > 0, 2);
-    valid_y = all(neighborhood_y_coords <= size(grid_x,1) & neighborhood_y_coords > 0, 2);
-    has_imagery = all([valid_x,valid_y],2);
+    else
+        % to quickly get the pixel values, we'll have to create a set of pixels
+        % in the circle neighborhoods around each pixel. so we'll start by just
+        % making one neighborhood that we'll translate to all the other
+        % locations. 
+        % start with a mask for the first neighborhood
+        mask = (grid_x - grid_x(1,pos_utmx_inds(1))).^2 + (grid_y - grid_y(pos_utmy_inds(1),1)).^2 <= (neighborhood_size*pix_scale).^2;
+    
+        % get the indices of all pixels within that mask
+        [y_inds_init,x_inds_init] = find(mask == true);
+    
+        % define the displacement between all the sampled points and the first
+        % point
+        x_displacements = pos_utmx_inds - pos_utmx_inds(1);
+        y_displacements = pos_utmy_inds - pos_utmy_inds(1);
+    
+        % and use that displacement to move the neighborhood and get all
+        % indices
+        neighborhood_x_coords = repmat(x_inds_init',numel(x_displacements),1) + x_displacements;
+        neighborhood_y_coords = repmat(y_inds_init',numel(y_displacements),1) + y_displacements;
+    
+        % check which neighborhoods are complete in the image
+        valid_x = all(neighborhood_x_coords <= size(grid_x,2) & neighborhood_x_coords > 0, 2);
+        valid_y = all(neighborhood_y_coords <= size(grid_x,1) & neighborhood_y_coords > 0, 2);
+        has_imagery = all([valid_x,valid_y],2);
+    
+        % take out neighborhoods without imagery
+        neighborhood_x_coords = neighborhood_x_coords(has_imagery, :);
+        neighborhood_y_coords = neighborhood_y_coords(has_imagery, :);
+    
+        % just use linear indices for speed and simplicity. As a column vector
+        % for now. We can smartly reshape later
+        linear_inds = sub2ind(size(grid_x), neighborhood_y_coords(:), neighborhood_x_coords(:));
+    
+        % make the image into a 2d matrix
+        col_image = reshape(satellite_image, [], size(satellite_image,3));
+    
+        % index the image at the proper location
+        col_pix_vals = col_image(linear_inds,:);
+    
+        % zeros array to fill in pixel values where we have imagery
+        pixel_vals = zeros(numel(pos_utmy_inds), size(satellite_image,3));
+       
+        % now we have to reshape and take the mean to report. Can do all in one line 
+        pixel_vals(has_imagery,:) = squeeze(mean(reshape(col_pix_vals,sum(has_imagery), size(neighborhood_x_coords,2), size(satellite_image,3)),2));
+    end
 
-    % take out neighborhoods without imagery
-    neighborhood_x_coords = neighborhood_x_coords(has_imagery, :);
-    neighborhood_y_coords = neighborhood_y_coords(has_imagery, :);
-
-    % just use linear indices for speed and simplicity. As a column vector
-    % for now. We can smartly reshape later
-    linear_inds = sub2ind(size(grid_x), neighborhood_y_coords(:), neighborhood_x_coords(:));
-
-    % make the image into a 2d matrix
-    col_image = reshape(satellite_image, [], size(satellite_image,3));
-
-    % index the image at the proper location
-    col_pix_vals = col_image(linear_inds,:);
-
-    % zeros array to fill in pixel values where we have imagery
-    pixel_vals = zeros(numel(pos_utmy_inds), size(satellite_image,3));
-   
-    % now we have to reshape and take the mean to report. Can do all in one line 
-    pixel_vals(has_imagery,:) = squeeze(mean(reshape(col_pix_vals,sum(has_imagery), size(neighborhood_x_coords,2), size(satellite_image,3)),2));
 
     % easiest grabbing of neighborhoods and assessing mean pixel vals is a
     % for loop, but that's slow. Comment this out and try something faster
