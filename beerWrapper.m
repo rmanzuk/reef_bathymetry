@@ -37,7 +37,7 @@ for i = 1:numel(gdats.lon)
     utmstruct.geoid = ellipsoid;
     utmstruct = defaultm(utmstruct);
     % and just do the conversion
-    [gdats.utmx{i},gdats.utmy{i}] = mfwdtran(utmstruct,gdats.lat{i},gdats.lon{i});
+    [gdats.utmx{i},gdats.utmy{i}] = projfwd(utmstruct,gdats.lat{i},gdats.lon{i});
 
     % while we're at it, let's mask our land returns
     gdats.track_mask{i} = track_land_mask(gdats.utmx{i}, gdats.utmy{i}, mask, UTM_x, UTM_y);
